@@ -90,7 +90,6 @@ class LQR():
         observation, info = self.env.reset()
         for _ in range(1000):
             # get action and input (force) required 
-            print(observation)
             u = LQR.get_input(self.K, observation)
             action = 0
                     # returns action and input force
