@@ -1,0 +1,9 @@
+gymnasium[classic-control]==0.29.1
+swig==4.2.1
+gymnasium[box2d]==0.29.1
+--find-links https://download.pytorch.org/whl/torch_stable.html
+torch==2.2.1+cpu
+torchvision==0.17.1+cpu
+torchaudio==2.2.1+cpu
+matplotlib==3.7.5
+scipy==1.10.1
