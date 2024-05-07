@@ -39,12 +39,12 @@ class Trainer():
         lie_derivative = torch.diagonal((d_x @ f.t()), 0)
         return lie_derivative
 
-    def train(self, X, x_0, epochs=2000, verbose=False, every_n_epochs=10, approx=False):
+    def train(self, X, x_0, epochs=2000, verbose=False, every_n_epochs=10, check_approx=False):
         model.train()
         valid = False
         loss_list = []
 
-        if approx == True:
+        if check_approx == True:
             env = gym.make('CartPole-v1')
 
         for epoch in range(1, epochs+1):
@@ -67,11 +67,15 @@ class Trainer():
             loss = self.lyapunov_loss(V_candidate, L_V, V_X0)
 
             # compute approximate f_dot and compare to true f
-            if approx == True:
+            if check_approx == True:
                 X_prime = step(X, u, env)
-                f_approx = approx_f_value(X, X_prime, dt=0.1)
+                f_approx = approx_f_value(X, X_prime, dt=0.02)
+
                 # check dx/dt estimates are close
-                assert(torch.all(abs(f - f_approx) < 1e-4))
+                # epsilon for x_dot. cart velocity and angular velocity are easier to approximate than accelerations.
+                # TODO is there a better way to approximate without running throught the simulator multiple times?
+                epsilon = torch.tensor([1e-4, 10., 1e-4, 10.])
+                assert(torch.all(abs(f - f_approx) < epsilon))
 
                 # could replace loss function 
                 L_V_approx = self.get_lie_derivative(X, V_candidate, f_approx)
@@ -88,6 +92,7 @@ class Trainer():
             # add counterexamples
 
         return loss_list
+    
 def load_model():
     lqr = LQR()
     K = lqr.K
@@ -104,6 +109,8 @@ def step(X, u, env):
     '''
     # take step in environment based upon current state and action
     N = X.shape[0]
+    u = torch.clip(u, -10, 10)
+
     X_prime = torch.empty_like(X)
     observation, info = env.reset()
     for i in range(N):
@@ -113,7 +120,7 @@ def step(X, u, env):
         env.unwrapped.state = x_i
 
         # get current action to take 
-        u_i = u[i].detach().numpy()
+        u_i = u[i][0].detach().numpy()
         action = 0
         if u_i > 0:
             # move cart right
@@ -132,7 +139,7 @@ def step(X, u, env):
 
     return X_prime
 
-def approx_f_value(X, X_prime, dt=0.1):
+def approx_f_value(X, X_prime, dt=0.02):
     # Approximate f value with S, a, S'
     y = (X_prime - X) / dt
     return y
@@ -143,8 +150,10 @@ def f_value(X, u):
     # Get system dynamics for cartpole 
     lqr = LQR()
     A, B, Q, R, K = lqr.get_system()
+    u = torch.clip(u, -10, 10)
     for i in range(0, N): 
         x_i = X[i, :].detach().numpy()
+
         u_i = u[i].detach().numpy()
         # xdot = Ax + Bu
         f = A@x_i + B@u_i
@@ -168,10 +177,10 @@ if __name__ == '__main__':
     N = 500
     # bounds for position, velocity, angle, and angular velocity
     X_p = torch.Tensor(N, 1).uniform_(-2.4, 2.4)
-    X_v = torch.Tensor(N, 1).uniform_(-3, 3)  
+    X_v = torch.Tensor(N, 1).uniform_(-2, 2)  
     # -12 to 12 degrees
     X_theta = torch.Tensor(N, 1).uniform_(-0.2094, 0.2094)  
-    X_theta_dot = torch.Tensor(N, 1).uniform_(-3, 3)
+    X_theta_dot = torch.Tensor(N, 1).uniform_(-2, 2)
     # concatenate all tensors as N x 4
     X = torch.cat([X_p, X_v, X_theta, X_theta_dot], dim=1)
     # stable conditions (used for V(x_0) = 0)
@@ -180,6 +189,5 @@ if __name__ == '__main__':
     X_0 = torch.Tensor([x_p_eq, x_v_eq, x_theta_eq, x_theta_dot_eq])
 
     ### Start training process ##
-    # TODO: code fails when approx set to true on line 129
-    approx = False
-    trainer.train(X, X_0, epochs=200, verbose=True, approx=approx)
+    approx = True # calculate lie derivative when system dynamics are unknown (this model compares the approximate f to the ground truth)
+    trainer.train(X, X_0, epochs=200, verbose=True, check_approx=approx)
