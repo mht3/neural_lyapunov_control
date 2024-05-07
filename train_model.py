@@ -4,21 +4,18 @@ from cartpole_lqr import LQR
 from model import NeuralLyapunovController
 from loss import LyapunovRisk
 from utils import dtanh, CheckLyapunov, AddCounterexamples
+import gymnasium as gym 
 
 class Trainer():
-    def __init__(self, model, lr, optimizer, loss_fn, f_value):
+    def __init__(self, model, lr, optimizer, loss_fn):
         self.model = model
         self.lr = lr
         self.optimizer = optimizer
         self.lyapunov_loss = loss_fn
-
-        # f=Xdot: how inputs change as a function of time
-        self.f_value = f_value
     
     def get_lie_derivative(self, X, V_candidate, f):
         '''
         Calculates L_V = ∑∂V/∂xᵢ*fᵢ
-        Could alternatively use finite difference methods to do this if f is unknown.
         '''
         w1 = self.model.layer1.weight
         b1 = self.model.layer1.bias
@@ -42,35 +39,55 @@ class Trainer():
         lie_derivative = torch.diagonal((d_x @ f.t()), 0)
         return lie_derivative
 
-    def train(self, X, x_0, epochs=2000, verbose=False, every_n_epochs=10):
+    def train(self, X, x_0, epochs=2000, verbose=False, every_n_epochs=10, approx=False):
         model.train()
         valid = False
+        loss_list = []
+
+        if approx == True:
+            env = gym.make('CartPole-v1')
+
         for epoch in range(1, epochs+1):
             if valid == True:
                 if verbose:
                     print('Found valid solution.')
                 break
-            
+
+            # zero gradients
+            optimizer.zero_grad()
+
             # get lyapunov function and input from model
             V_candidate, u = self.model(X)
             # get lyapunov function evaluated at equilibrium point
             V_X0, u_X0 = self.model(x_0)
             # Compute lie derivative of V : L_V = ∑∂V/∂xᵢ*fᵢ
-
-            f = self.f_value(X, u)
+            f = f_value(X, u)
             L_V = self.get_lie_derivative(X, V_candidate, f)
-
-            optimizer.zero_grad()
-
+            # get loss
             loss = self.lyapunov_loss(V_candidate, L_V, V_X0)
+
+            # compute approximate f_dot and compare to true f
+            if approx == True:
+                X_prime = step(X, u, env)
+                f_approx = approx_f_value(X, X_prime, dt=0.1)
+                # check dx/dt estimates are close
+                assert(torch.all(abs(f - f_approx) < 1e-4))
+
+                # could replace loss function 
+                L_V_approx = self.get_lie_derivative(X, V_candidate, f_approx)
                     
+            
+
+            loss_list.append(loss.item)
             loss.backward()
             self.optimizer.step() 
             if verbose and (epoch % every_n_epochs == 0):
                 print('Epoch:\t{}\tLyapunov Risk: {:.4f}'.format(epoch, loss.item()))
 
-    
+            # TODO Add in falsifier here
+            # add counterexamples
 
+        return loss_list
 def load_model():
     lqr = LQR()
     K = lqr.K
@@ -79,23 +96,60 @@ def load_model():
     controller = NeuralLyapunovController(d_in, n_hidden, d_out, lqr_val)
     return controller
 
+def step(X, u, env):
+    '''
+    Generates all X_primes needed given current state and current action
+    X: current position, velocity, pole angle, and pole angular velocity
+    u: input for cartpole 
+    '''
+    # take step in environment based upon current state and action
+    N = X.shape[0]
+    X_prime = torch.empty_like(X)
+    observation, info = env.reset()
+    for i in range(N):
+        x_i = X[i, :].detach().numpy()
+        # set environment as x_i
+        observation, info = env.reset()
+        env.unwrapped.state = x_i
+
+        # get current action to take 
+        u_i = u[i].detach().numpy()
+        action = 0
+        if u_i > 0:
+            # move cart right
+            action = 1
+        else:
+            # move cart left
+            action = 0
+
+        # set magnitude of force as input
+        env.unwrapped.force_mag = abs(u_i)
+        # take step in environment
+        # TODO: Error when taking step 
+        observation, reward, terminated, truncated, info = env.step(action)
+        # add sample to X_prime
+        X_prime[i, :] = torch.tensor(observation)
+
+    return X_prime
+
+def approx_f_value(X, X_prime, dt=0.1):
+    # Approximate f value with S, a, S'
+    y = (X_prime - X) / dt
+    return y
+
 def f_value(X, u):
-    #Dynamics
     y = []
     N = X.shape[0]
+    # Get system dynamics for cartpole 
+    lqr = LQR()
+    A, B, Q, R, K = lqr.get_system()
     for i in range(0, N): 
-        x, x_dot, theta, theta_dot = X[i, :]
-
-        # TODO: Get dynamics
-        v = 0. # acceleration
-        w_dot = 0. # angular acceleration
-
-        f = [ x_dot, 
-              v,
-              theta_dot,
-              w_dot]
+        x_i = X[i, :].detach().numpy()
+        u_i = u[i].detach().numpy()
+        # xdot = Ax + Bu
+        f = A@x_i + B@u_i
         
-        y.append(f) 
+        y.append(f.tolist()) 
 
     y = torch.tensor(y)
     return y
@@ -107,17 +161,17 @@ if __name__ == '__main__':
     lr = 0.01
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = LyapunovRisk(lyapunov_factor=1., lie_factor=1., equilibrium_factor=1.)
-    trainer = Trainer(model, lr, optimizer, loss_fn, f_value)
+    trainer = Trainer(model, lr, optimizer, loss_fn)
 
     ### Generate random training data ###
     # number of samples
     N = 500
     # bounds for position, velocity, angle, and angular velocity
-    X_p = torch.Tensor(N, 1).uniform_(-4.8, 4.8)
-    X_v = torch.Tensor(N, 1).uniform_(-6, 6)  
-    # -24 to 24 degrees
-    X_theta = torch.Tensor(N, 1).uniform_(-0.4189, 0.4189)  
-    X_theta_dot = torch.Tensor(N, 1).uniform_(-6, 6)
+    X_p = torch.Tensor(N, 1).uniform_(-2.4, 2.4)
+    X_v = torch.Tensor(N, 1).uniform_(-3, 3)  
+    # -12 to 12 degrees
+    X_theta = torch.Tensor(N, 1).uniform_(-0.2094, 0.2094)  
+    X_theta_dot = torch.Tensor(N, 1).uniform_(-3, 3)
     # concatenate all tensors as N x 4
     X = torch.cat([X_p, X_v, X_theta, X_theta_dot], dim=1)
     # stable conditions (used for V(x_0) = 0)
@@ -126,4 +180,6 @@ if __name__ == '__main__':
     X_0 = torch.Tensor([x_p_eq, x_v_eq, x_theta_eq, x_theta_dot_eq])
 
     ### Start training process ##
-    trainer.train(X, X_0, epochs=200, verbose=True)
+    # TODO: code fails when approx set to true on line 129
+    approx = False
+    trainer.train(X, X_0, epochs=200, verbose=True, approx=approx)
