@@ -3,7 +3,7 @@ import torch
 from cartpole_lqr import LQR
 from model import NeuralLyapunovController
 from loss import LyapunovRisk
-from utils import dtanh, CheckLyapunov, AddCounterexamples
+from utils import CheckLyapunov, AddCounterexamples
 import gymnasium as gym 
 
 class Trainer():
@@ -25,9 +25,9 @@ class Trainer():
         z1 = X @ w1.t() + b1
         a1 = torch.tanh(z1)
         z2 = a1 @ w2.t() + b2
-        d_z2 = dtanh(z2) # originally dtanh(V_candidate) in Ya-Chien's code
+        d_z2 = 1. - V_candidate**2
         partial_z2_a1 = w2
-        partial_a1_z1 = dtanh(z1)
+        partial_a1_z1 = 1 - torch.tanh(z1)**2
         partial_z1_x = w1
 
         d_a1 = (d_z2 @ partial_z2_a1)
@@ -75,6 +75,7 @@ class Trainer():
                 # epsilon for x_dot. cart velocity and angular velocity are easier to approximate than accelerations.
                 # TODO is there a better way to approximate without running throught the simulator multiple times?
                 epsilon = torch.tensor([1e-4, 10., 1e-4, 10.])
+
                 assert(torch.all(abs(f - f_approx) < epsilon))
 
                 # could replace loss function 

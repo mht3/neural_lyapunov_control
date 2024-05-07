@@ -28,10 +28,6 @@ def AddCounterexamples(x, CE, N):
             n_pt.append(nearby[j][i])             
         x = torch.cat((x, torch.tensor([n_pt])), 0)
     return x
-  
-def dtanh(s):
-    # Derivative of activation
-    return 1.0 - s**2
 
 def Plot3D(X, Y, V, r):
     # Plot Lyapunov functions  
