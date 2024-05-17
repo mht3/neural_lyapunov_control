@@ -5,6 +5,7 @@ from model import NeuralLyapunovController
 from loss import LyapunovRisk
 from utils import CheckLyapunov, AddCounterexamples
 import gymnasium as gym 
+from matplotlib import pyplot as plt
 
 class Trainer():
     def __init__(self, model, lr, optimizer, loss_fn):
@@ -43,7 +44,7 @@ class Trainer():
         model.train()
         valid = False
         loss_list = []
-
+        approx_loss_list = []
         if check_approx == True:
             env = gym.make('CartPole-v1')
 
@@ -65,7 +66,7 @@ class Trainer():
             L_V = self.get_lie_derivative(X, V_candidate, f)
             # get loss
             loss = self.lyapunov_loss(V_candidate, L_V, V_X0)
-
+            
             # compute approximate f_dot and compare to true f
             if check_approx == True:
                 X_prime = step(X, u, env)
@@ -80,10 +81,11 @@ class Trainer():
 
                 # could replace loss function 
                 L_V_approx = self.get_lie_derivative(X, V_candidate, f_approx)
-                    
+                approx_loss = self.lyapunov_loss(V_candidate, L_V_approx, V_X0)
+                approx_loss_list.append(approx_loss.item())
             
 
-            loss_list.append(loss.item)
+            loss_list.append(loss.item())
             loss.backward()
             self.optimizer.step() 
             if verbose and (epoch % every_n_epochs == 0):
@@ -92,7 +94,10 @@ class Trainer():
             # TODO Add in falsifier here
             # add counterexamples
 
-        return loss_list
+        if check_approx == True:
+            return loss_list, approx_loss_list
+        else:
+            return loss_list
     
 def load_model():
     lqr = LQR()
@@ -133,7 +138,6 @@ def step(X, u, env):
         # set magnitude of force as input
         env.unwrapped.force_mag = abs(u_i)
         # take step in environment
-        # TODO: Error when taking step 
         observation, reward, terminated, truncated, info = env.step(action)
         # add sample to X_prime
         X_prime[i, :] = torch.tensor(observation)
@@ -163,8 +167,17 @@ def f_value(X, u):
 
     y = torch.tensor(y)
     return y
-        
 
+def plot_losses(true_loss, approx_loss):
+    fig = plt.figure(figsize=(8, 6))
+    x = range(len(true_loss))
+    plt.plot(x, true_loss, label='True Loss')
+    plt.plot(x, approx_loss, label='Approximate Loss')
+    plt.ylabel('Lyapunov Risk', size=16)
+    plt.xlabel('Epochs', size=16)
+    plt.grid()
+    plt.legend()
+    plt.savefig('results/loss_comparison.png')
 if __name__ == '__main__':
     ### load model and training pipeline with initialized LQR weights ###
     model = load_model()
@@ -191,4 +204,5 @@ if __name__ == '__main__':
 
     ### Start training process ##
     approx = True # calculate lie derivative when system dynamics are unknown (this model compares the approximate f to the ground truth)
-    trainer.train(X, X_0, epochs=200, verbose=True, check_approx=approx)
+    true_loss, approx_loss = trainer.train(X, X_0, epochs=200, verbose=True, check_approx=approx)
+    plot_losses(true_loss, approx_loss)
