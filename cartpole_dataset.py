@@ -20,7 +20,7 @@ class CartpoleDatasetBuilder():
             self.scaled_sigma = 0
         else:
             self.scaled_sigma = (np.array(state_max) - np.array(state_min)) / (2*inverse_noise_factor)
-        print(self.scaled_sigma)
+        #print(self.scaled_sigma)
         self.trajectory_length = trajectory_length
         self.N = N
 
@@ -106,21 +106,37 @@ class CartpoleDatasetBuilder():
             t_max = target_maxs[i]
             x = torch.Tensor(self.N, 1).uniform_(t_min, t_max)
             X = torch.cat([X, x], dim=1)
-
         return X
+
 
     def save(self, data, filename='trajectories.npz'):
         # TODO: Save dataset/compress
         # Could store each trajectory in flattened list each s, a, s' pair is separated by 11 entries
-        pass
+        flattened_data = self.convert_data(data)
+        np.savez_compressed(filename, *flattened_data)
 
-    def load(self, filename):
+
+    def load_and_reconstruct(self, filename):
         # TODO load compressed dataset in original form
-        pass
+        loaded = np.load(filename, allow_pickle=True)
+        loaded_data = [loaded[key] for key in loaded]
 
-    def convert_data(data):
+        states,actions,next_states = loaded_data
+        trajectories = []
+        for i in range(0, len(states), self.trajectory_length):
+            trajectory = [(states[j], actions[j], next_states[j]) for j in range(i, i + self.trajectory_length)]
+            trajectories.append(trajectory)
+        return trajectories
+
+
+    def convert_data(self,data):
         # TODO flatten trajectories to s, a, s' 
-        pass
+        flattened = []
+        for trajectory in data:
+            for state,action,next_state in trajectory:
+                flattened.append((state,action,next_state))
+        all_states, all_actions, all_next_states = zip(*flattened)
+        return np.array(all_states), np.array(all_actions), np.array(all_next_states)
 
 if __name__ == '__main__':
 
@@ -131,5 +147,10 @@ if __name__ == '__main__':
     dataset = CartpoleDatasetBuilder(state_min, state_max, trajectory_length=2,
                                      N=5, inverse_noise_factor=3.)
     trajectories = dataset.build()
+
+
+    dataset.save(trajectories)
+    loaded_data = dataset.load_and_reconstruct('trajectories.npz')
+
 
     # dataset.save(trajectories, filename='trajectories')
